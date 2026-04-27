@@ -16,20 +16,19 @@ class TransactionTest {
         paidAmount = Money.of(300_000),
     )
 
-    private fun paidTransaction(): Transaction {
+    private fun paidTransactionWithDetails(): Pair<Transaction, List<TransactionDetail>> {
         val tx = Transaction(bookingOrderId = 1L)
-        tx.complete(ledgerInfo)
-        return tx
+        val paymentDetail = tx.complete(ledgerInfo)
+        return tx to listOf(paymentDetail)
     }
 
     @Test
-    fun `PENDING 상태에서 complete 하면 PAID가 되고 PAYMENT detail이 추가된다`() {
+    fun `PENDING 상태에서 complete 하면 PAID가 되고 PAYMENT detail이 반환된다`() {
         val tx = Transaction(bookingOrderId = 1L)
-        tx.complete(ledgerInfo)
+        val detail = tx.complete(ledgerInfo)
         assertThat(tx.status).isEqualTo(TransactionStatus.PAID)
-        assertThat(tx.details).hasSize(1)
-        assertThat(tx.details[0].type).isEqualTo(TransactionDetailType.PAYMENT)
-        assertThat(tx.paidAmount).isEqualTo(Money.of(300_000))
+        assertThat(detail.type).isEqualTo(TransactionDetailType.PAYMENT)
+        assertThat(detail.ledgerInfo?.paidAmount).isEqualTo(Money.of(300_000))
     }
 
     @Test
@@ -40,45 +39,49 @@ class TransactionTest {
     }
 
     @Test
-    fun `PAID 상태에서 cancel 하면 CANCELLED가 되고 환불 detail이 추가된다`() {
-        val tx = paidTransaction()
-        tx.cancel("예약 선점 만료")
+    fun `PAID 상태에서 cancel 하면 CANCELLED가 되고 환불 detail이 생성된다`() {
+        val (tx, details) = paidTransactionWithDetails()
+        val refund = tx.cancel(details, "예약 선점 만료")
         assertThat(tx.status).isEqualTo(TransactionStatus.CANCELLED)
-        assertThat(tx.details).hasSize(2)
-        assertThat(tx.details[1].type).isEqualTo(TransactionDetailType.REFUND)
+        assertThat(refund.type).isEqualTo(TransactionDetailType.REFUND)
+        assertThat(refund.refundAmount?.money).isEqualTo(Money.of(300_000))
     }
 
     @Test
-    fun `부분 환불 후 잔여 금액이 남으면 PARTIAL_CANCELLED가 된다`() {
-        val tx = paidTransaction()
-        tx.partialRefund(RefundAmount(money = Money.of(100_000), reason = "1박 취소"))
-        assertThat(tx.status).isEqualTo(TransactionStatus.PARTIAL_CANCELLED)
-        assertThat(tx.remainingAmount).isEqualTo(Money.of(200_000))
-        assertThat(tx.details).hasSize(2)
-    }
-
-    @Test
-    fun `부분 환불 후 잔여 금액이 0이면 FULLY_CANCELLED가 된다`() {
-        val tx = paidTransaction()
-        tx.partialRefund(RefundAmount(money = Money.of(300_000), reason = "전액 환불"))
+    fun `PAID 상태에서 cancelWithPenalty 로 페널티 차감 환불 시 FULLY_CANCELLED 로 전이된다`() {
+        val (tx, details) = paidTransactionWithDetails()
+        val refund = tx.cancelWithPenalty(
+            details,
+            RefundAmount(money = Money.of(210_000), reason = "고객 취소 — 페널티 30% 차감"),
+        )
         assertThat(tx.status).isEqualTo(TransactionStatus.FULLY_CANCELLED)
-        assertThat(tx.remainingAmount).isEqualTo(Money.ZERO)
+        assertThat(refund.type).isEqualTo(TransactionDetailType.REFUND)
+        assertThat(refund.refundAmount?.money).isEqualTo(Money.of(210_000))
     }
 
     @Test
-    fun `환불 금액이 잔여 결제 금액을 초과하면 예외가 발생한다`() {
-        val tx = paidTransaction()
+    fun `cancelWithPenalty 로 전액 환불(페널티 0) 되어도 FULLY_CANCELLED 로 전이된다`() {
+        val (tx, details) = paidTransactionWithDetails()
+        tx.cancelWithPenalty(details, RefundAmount(money = Money.of(300_000), reason = "전액 환불"))
+        assertThat(tx.status).isEqualTo(TransactionStatus.FULLY_CANCELLED)
+    }
+
+    @Test
+    fun `cancelWithPenalty 환불 금액이 결제 금액을 초과하면 예외가 발생한다`() {
+        val (tx, details) = paidTransactionWithDetails()
         assertThatThrownBy {
-            tx.partialRefund(RefundAmount(money = Money.of(400_000), reason = "초과 환불"))
+            tx.cancelWithPenalty(details, RefundAmount(money = Money.of(400_000), reason = "초과 환불"))
         }.isInstanceOf(IllegalArgumentException::class.java)
-            .hasMessageContaining("환불 금액이 잔여 결제 금액을 초과합니다")
+            .hasMessageContaining("환불 금액이 결제 금액을 초과합니다")
     }
 
     @Test
-    fun `TransactionDetail은 append-only — PAID 이후 detail 수는 증가만 한다`() {
-        val tx = paidTransaction()
-        val sizeAfterPayment = tx.details.size
-        tx.partialRefund(RefundAmount(money = Money.of(100_000), reason = "1박 취소"))
-        assertThat(tx.details.size).isGreaterThan(sizeAfterPayment)
+    fun `cancelWithPenalty 는 PAID 가 아닌 상태에서는 실행할 수 없다`() {
+        val (tx, details) = paidTransactionWithDetails()
+        tx.cancelWithPenalty(details, RefundAmount(money = Money.of(300_000), reason = "1차 취소"))
+        assertThatThrownBy {
+            tx.cancelWithPenalty(details, RefundAmount(money = Money.of(100_000), reason = "2차 시도"))
+        }.isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining("PAID 상태에서만")
     }
 }

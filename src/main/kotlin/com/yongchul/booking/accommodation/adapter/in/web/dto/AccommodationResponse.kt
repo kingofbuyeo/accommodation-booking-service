@@ -4,7 +4,7 @@ import com.yongchul.booking.accommodation.domain.Accommodation
 import com.yongchul.booking.accommodation.domain.Room
 import com.yongchul.booking.accommodation.domain.RoomSchedule
 import com.yongchul.booking.accommodation.domain.RoomScheduleType
-import com.yongchul.booking.accommodation.domain.vo.PreemptionPolicy
+import com.yongchul.booking.accommodation.domain.vo.AccommodationOperationPolicy
 import java.math.BigDecimal
 import java.time.LocalDate
 
@@ -14,7 +14,9 @@ data class AccommodationResponse(
     val address: String,
     val description: String?,
     val hostName: String,
-    val preemptionPolicy: PolicyResponse,
+    val operationPolicy: PolicyResponse,
+    /** ISO LocalTime 문자열 (예: "15:00") */
+    val checkInTime: String,
     val rooms: List<RoomResponse>,
 ) {
     data class RoomResponse(
@@ -23,7 +25,7 @@ data class AccommodationResponse(
         val capacity: Int,
         val pricePerNight: BigDecimal,
         val currency: String,
-        val preemptionPolicy: PolicyResponse,
+        val operationPolicy: PolicyResponse,
         val blockedDates: List<BlockedDate>,
         val bookedDates: List<LocalDate>,
     )
@@ -34,12 +36,18 @@ data class AccommodationResponse(
         val reason: String?,
     )
 
+    data class CancellationPenaltyTierResponse(
+        val minDaysToCheckIn: Int,
+        val refundRatio: BigDecimal,
+    )
+
     data class PolicyResponse(
         val shortLeadTimeDays: Int,
         val shortLeadTimeTtlMinutes: Long,
         val longLeadTimeDays: Int,
         val longLeadTimeTtlMinutes: Long,
         val defaultTtlMinutes: Long,
+        val cancellationPenaltyTiers: List<CancellationPenaltyTierResponse>,
     )
 
     companion object {
@@ -54,7 +62,8 @@ data class AccommodationResponse(
             address = accommodation.address,
             description = accommodation.description,
             hostName = accommodation.hostName,
-            preemptionPolicy = accommodation.preemptionPolicy.toResponse(),
+            operationPolicy = accommodation.operationPolicy.toResponse(),
+            checkInTime = accommodation.effectiveCheckInTime().toString(),
             rooms = rooms.map { room ->
                 RoomResponse(
                     id = room.id,
@@ -62,7 +71,7 @@ data class AccommodationResponse(
                     capacity = room.capacity,
                     pricePerNight = room.pricePerNight.amount,
                     currency = room.pricePerNight.currency,
-                    preemptionPolicy = room.preemptionPolicy.toResponse(),
+                    operationPolicy = room.operationPolicy.toResponse(),
                     blockedDates = (schedulesByRoomId[room.id] ?: emptyList()).map { s ->
                         BlockedDate(date = s.blockedDate, type = s.type, reason = s.reason)
                     },
@@ -71,14 +80,20 @@ data class AccommodationResponse(
             },
         )
 
-        private fun PreemptionPolicy?.toResponse(): PolicyResponse {
-            val p = this ?: PreemptionPolicy()
+        private fun AccommodationOperationPolicy?.toResponse(): PolicyResponse {
+            val p = this ?: AccommodationOperationPolicy()
             return PolicyResponse(
-                shortLeadTimeDays = p.shortLeadTimeDays,
-                shortLeadTimeTtlMinutes = p.shortLeadTimeTtlMinutes,
-                longLeadTimeDays = p.longLeadTimeDays,
-                longLeadTimeTtlMinutes = p.longLeadTimeTtlMinutes,
-                defaultTtlMinutes = p.defaultTtlMinutes,
+                shortLeadTimeDays = p.effectiveShortLeadTimeDays,
+                shortLeadTimeTtlMinutes = p.effectiveShortLeadTimeTtlMinutes,
+                longLeadTimeDays = p.effectiveLongLeadTimeDays,
+                longLeadTimeTtlMinutes = p.effectiveLongLeadTimeTtlMinutes,
+                defaultTtlMinutes = p.effectiveDefaultTtlMinutes,
+                cancellationPenaltyTiers = p.effectiveCancellationPenaltyTiers.map {
+                    CancellationPenaltyTierResponse(
+                        minDaysToCheckIn = it.minDaysToCheckIn,
+                        refundRatio = it.refundRatio,
+                    )
+                },
             )
         }
     }

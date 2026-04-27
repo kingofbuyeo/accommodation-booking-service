@@ -1,6 +1,6 @@
 package com.yongchul.booking.accommodation.domain
 
-import com.yongchul.booking.accommodation.domain.vo.PreemptionPolicy
+import com.yongchul.booking.accommodation.domain.vo.AccommodationOperationPolicy
 import com.yongchul.booking.common.DateRange
 import com.yongchul.booking.common.Money
 import jakarta.persistence.AttributeOverride
@@ -39,7 +39,7 @@ class Room(
 
     // ddl-auto: update로 컬럼이 나중에 추가된 경우 기존 row는 null로 로드될 수 있음
     @Embedded
-    var preemptionPolicy: PreemptionPolicy? = PreemptionPolicy(),
+    var operationPolicy: AccommodationOperationPolicy? = AccommodationOperationPolicy(),
 ) {
     fun isAvailableFor(schedules: List<RoomSchedule>, dateRange: DateRange): Boolean =
         schedules.none { dateRange.contains(it.blockedDate) }
@@ -47,5 +47,7 @@ class Room(
     fun calculateTotalPrice(dateRange: DateRange): Money = pricePerNight * dateRange.nights
 
     fun calculatePreemptionTtl(checkInDate: LocalDate): Duration =
-        (preemptionPolicy ?: PreemptionPolicy()).calculateTtl(checkInDate)
+        resolvedPolicy().calculateTtl(checkInDate)
+
+    fun resolvedPolicy(): AccommodationOperationPolicy = operationPolicy ?: AccommodationOperationPolicy()
 }

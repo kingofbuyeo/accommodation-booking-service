@@ -21,26 +21,10 @@ data class TransactionFailedEvent(
 }
 
 /**
- * 부분 환불 처리 이벤트.
- *
- * 발행: 결제 컨텍스트 (partialRefund 후 PARTIAL_CANCELLED 상태)
- * 수신: 예약 컨텍스트 → DateRange 조정
- */
-data class PartialRefundProcessedEvent(
-    val transactionId: String,
-    val bookingOrderId: String,
-    val refundAmountValue: Long,
-    val currency: String,
-    override val occurredAt: LocalDateTime = LocalDateTime.now(),
-) : TransactionDomainEvent {
-    override val kafkaPartitionKey: String get() = bookingOrderId
-}
-
-/**
  * 전액 환불 완료 이벤트.
  *
- * 발행: 결제 컨텍스트 (잔여 결제 금액 = 0)
- * 수신: 예약 컨텍스트 → 취소됨, 숙소 컨텍스트 → 일정 선택가능 복원
+ * 발행: 결제 컨텍스트 (고객 요청 취소 환불 완료 — 페널티 차감 여부와 무관하게 이 이벤트 하나만 발행)
+ * 수신: 예약 컨텍스트 → 취소됨 전이, 숙소 컨텍스트 → 일정 선점/확정 해제
  */
 data class TransactionFullyRefundedEvent(
     val transactionId: String,

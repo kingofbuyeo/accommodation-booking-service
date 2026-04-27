@@ -16,7 +16,7 @@ class SchedulePreemptionService(
 ) : SchedulePreemptionUseCase {
 
     // 선점 흐름: 1) DB 확정 예약 충돌 확인 (Redis 캐시 미스 대비) 2) 충돌 없으면 Redis SETNX 시도
-    // TTL은 숙소의 PreemptionPolicy가 체크인 일자 기반으로 계산
+    // TTL은 숙소의 AccommodationOperationPolicy가 체크인 일자 기반으로 계산
     override fun preempt(command: SchedulePreemptionUseCase.PreemptCommand): Boolean {
         val requestedDates = command.dateRange.dates()
 
@@ -41,15 +41,25 @@ class SchedulePreemptionService(
 
     @Transactional
     override fun confirmPreemption(command: SchedulePreemptionUseCase.ConfirmPreemptionCommand) {
-        val records = command.dateRange.dates().map { date ->
-            ConfirmedBookingDate(
-                accommodationId = command.accommodationId,
-                roomId = command.roomId,
-                reservedDate = date,
-                bookingOrderId = command.bookingOrderId,
+        // 이미 확정된 날짜는 건너뛴다 — confirmOrder 의 sync 흐름과 Kafka consumer 의 async 흐름이 동일 작업을 중복 수행할 수 있어 멱등 처리 필요.
+        val requestedDates = command.dateRange.dates()
+        val alreadyConfirmed = confirmedBookingDateJpaRepository
+            .findByRoomIdAndReservedDateIn(command.roomId, requestedDates)
+            .map { it.reservedDate }
+            .toSet()
+        val newDates = requestedDates.filterNot { alreadyConfirmed.contains(it) }
+        if (newDates.isNotEmpty()) {
+            confirmedBookingDateJpaRepository.saveAll(
+                newDates.map { date ->
+                    ConfirmedBookingDate(
+                        accommodationId = command.accommodationId,
+                        roomId = command.roomId,
+                        reservedDate = date,
+                        bookingOrderId = command.bookingOrderId,
+                    )
+                }
             )
         }
-        confirmedBookingDateJpaRepository.saveAll(records)
 
         schedulePreemptionPort.promoteToConfirmed(
             accommodationId = command.accommodationId,

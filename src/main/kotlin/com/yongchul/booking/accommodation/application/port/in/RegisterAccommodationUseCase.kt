@@ -4,9 +4,10 @@ import com.yongchul.booking.accommodation.domain.Accommodation
 import com.yongchul.booking.accommodation.domain.Room
 import com.yongchul.booking.accommodation.domain.RoomSchedule
 import com.yongchul.booking.accommodation.domain.RoomScheduleType
-import com.yongchul.booking.accommodation.domain.vo.PreemptionPolicy
+import com.yongchul.booking.accommodation.domain.vo.AccommodationOperationPolicy
 import com.yongchul.booking.common.Money
 import java.time.LocalDate
+import java.time.LocalTime
 
 interface RegisterAccommodationUseCase {
     fun register(command: RegisterAccommodationCommand): Accommodation
@@ -17,7 +18,8 @@ interface RegisterAccommodationUseCase {
         val address: String,
         val description: String?,
         val hostName: String,
-        val preemptionPolicy: PreemptionPolicy = PreemptionPolicy(),
+        val operationPolicy: AccommodationOperationPolicy = AccommodationOperationPolicy(),
+        val checkInTime: LocalTime? = null,
     )
 
     data class AddRoomCommand(
@@ -25,7 +27,7 @@ interface RegisterAccommodationUseCase {
         val roomName: String,
         val capacity: Int,
         val pricePerNight: Money,
-        val preemptionPolicy: PreemptionPolicy = PreemptionPolicy(),
+        val operationPolicy: AccommodationOperationPolicy = AccommodationOperationPolicy(),
     )
 }
 

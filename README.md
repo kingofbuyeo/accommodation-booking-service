@@ -151,14 +151,15 @@ CHECKED_IN → CHECKED_OUT (체크아웃)
 **상태 흐름**
 
 ```
-PENDING → PAID → PARTIAL_CANCELLED → FULLY_CANCELLED
-        → FAILED
-        → CANCELLED
+PENDING → PAID → FULLY_CANCELLED  (고객 요청 취소 — 페널티 차감 후 잔액 환불, 한 번의 환불 row 로 종료)
+        → FAILED                  (결제 실패 — 재시도는 신규 Transaction)
+        → CANCELLED               (Booking EXPIRED 확인 후 시스템 자동 환불)
 ```
 
 불변조건:
-- `TransactionDetail`은 append-only (수정 불가)
-- 잔여 결제 금액이 0이 되면 FULLY_CANCELLED로 전이
+- `TransactionDetail` 은 append-only (수정 불가)
+- 고객 요청 취소는 단 한 번의 환불 row 를 남기고 즉시 FULLY_CANCELLED 로 전이. 페널티 잔액은 호스트 몫으로 남아 추가 환불 대상이 아님
+- 날짜 단위 부분 취소는 허용하지 않음 — "부분 취소"는 페널티 차감 환불 케이스를 지칭하는 용어로, 도메인 이벤트는 항상 `TransactionFullyRefundedEvent` 단일
 
 ---
 
