@@ -5,12 +5,15 @@ import com.yongchul.booking.accommodation.application.port.`in`.BlockRoomSchedul
 import com.yongchul.booking.accommodation.application.port.`in`.RegisterAccommodationUseCase
 import com.yongchul.booking.accommodation.application.service.AccommodationService
 import com.yongchul.booking.accommodation.domain.RoomScheduleType
-import com.yongchul.booking.accommodation.domain.vo.PreemptionPolicy
+import com.yongchul.booking.accommodation.domain.vo.AccommodationOperationPolicy
+import com.yongchul.booking.accommodation.domain.vo.CancellationPenaltyTier
 import com.yongchul.booking.common.Money
 import org.springframework.format.annotation.DateTimeFormat
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
+import java.math.BigDecimal
 import java.time.LocalDate
+import java.time.LocalTime
 
 @RestController
 @RequestMapping("/api/v1/accommodations")
@@ -50,7 +53,8 @@ class AccommodationController(
                 address = request.address,
                 description = request.description,
                 hostName = request.hostName,
-                preemptionPolicy = request.toPreemptionPolicy(),
+                operationPolicy = request.toOperationPolicy(),
+                checkInTime = request.checkInTime?.let { LocalTime.parse(it) },
             )
         )
         return ResponseEntity.ok(accommodation.id)
@@ -67,7 +71,7 @@ class AccommodationController(
                 roomName = request.roomName,
                 capacity = request.capacity,
                 pricePerNight = Money.of(request.pricePerNight),
-                preemptionPolicy = request.toPreemptionPolicy(),
+                operationPolicy = request.toOperationPolicy(),
             )
         )
         return ResponseEntity.ok().build()
@@ -91,6 +95,13 @@ class AccommodationController(
         return ResponseEntity.ok().build()
     }
 
+    data class CancellationPenaltyTierRequest(
+        val minDaysToCheckIn: Int,
+        val refundRatio: BigDecimal,
+    ) {
+        fun toTier() = CancellationPenaltyTier(minDaysToCheckIn = minDaysToCheckIn, refundRatio = refundRatio)
+    }
+
     data class RegisterRequest(
         val name: String,
         val address: String,
@@ -101,14 +112,23 @@ class AccommodationController(
         val longLeadTimeDays: Int = 30,
         val longLeadTimeTtlMinutes: Long = 120,
         val defaultTtlMinutes: Long = 60,
+        val cancellationPenaltyTiers: List<CancellationPenaltyTierRequest>? = null,
+        /** ISO-8601 LocalTime 문자열 (예: "15:00"). null 이면 기본값(15:00) 사용 */
+        val checkInTime: String? = null,
     ) {
-        fun toPreemptionPolicy() = PreemptionPolicy(
-            shortLeadTimeDays = shortLeadTimeDays,
-            shortLeadTimeTtlMinutes = shortLeadTimeTtlMinutes,
-            longLeadTimeDays = longLeadTimeDays,
-            longLeadTimeTtlMinutes = longLeadTimeTtlMinutes,
-            defaultTtlMinutes = defaultTtlMinutes,
-        )
+        fun toOperationPolicy(): AccommodationOperationPolicy {
+            val tiers = cancellationPenaltyTiers?.map { it.toTier() }
+                ?.takeIf { it.isNotEmpty() }
+                ?: AccommodationOperationPolicy.DEFAULT_TIERS
+            return AccommodationOperationPolicy(
+                shortLeadTimeDays = shortLeadTimeDays,
+                shortLeadTimeTtlMinutes = shortLeadTimeTtlMinutes,
+                longLeadTimeDays = longLeadTimeDays,
+                longLeadTimeTtlMinutes = longLeadTimeTtlMinutes,
+                defaultTtlMinutes = defaultTtlMinutes,
+                cancellationPenaltyTiers = tiers,
+            )
+        }
     }
 
     data class AddRoomRequest(
@@ -120,14 +140,21 @@ class AccommodationController(
         val longLeadTimeDays: Int = 30,
         val longLeadTimeTtlMinutes: Long = 120,
         val defaultTtlMinutes: Long = 60,
+        val cancellationPenaltyTiers: List<CancellationPenaltyTierRequest>? = null,
     ) {
-        fun toPreemptionPolicy() = PreemptionPolicy(
-            shortLeadTimeDays = shortLeadTimeDays,
-            shortLeadTimeTtlMinutes = shortLeadTimeTtlMinutes,
-            longLeadTimeDays = longLeadTimeDays,
-            longLeadTimeTtlMinutes = longLeadTimeTtlMinutes,
-            defaultTtlMinutes = defaultTtlMinutes,
-        )
+        fun toOperationPolicy(): AccommodationOperationPolicy {
+            val tiers = cancellationPenaltyTiers?.map { it.toTier() }
+                ?.takeIf { it.isNotEmpty() }
+                ?: AccommodationOperationPolicy.DEFAULT_TIERS
+            return AccommodationOperationPolicy(
+                shortLeadTimeDays = shortLeadTimeDays,
+                shortLeadTimeTtlMinutes = shortLeadTimeTtlMinutes,
+                longLeadTimeDays = longLeadTimeDays,
+                longLeadTimeTtlMinutes = longLeadTimeTtlMinutes,
+                defaultTtlMinutes = defaultTtlMinutes,
+                cancellationPenaltyTiers = tiers,
+            )
+        }
     }
 
     @PostMapping("/{accommodationId}/rooms/{roomId}/schedules/block/bulk")

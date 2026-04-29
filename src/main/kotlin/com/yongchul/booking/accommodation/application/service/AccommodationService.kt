@@ -5,14 +5,17 @@ import com.yongchul.booking.accommodation.adapter.out.persistence.ConfirmedBooki
 import com.yongchul.booking.accommodation.adapter.out.persistence.RoomJpaRepository
 import com.yongchul.booking.accommodation.adapter.out.persistence.RoomScheduleJpaRepository
 import com.yongchul.booking.accommodation.application.port.`in`.BlockRoomScheduleUseCase
+import com.yongchul.booking.accommodation.application.port.`in`.CalculateCancellationRefundUseCase
 import com.yongchul.booking.accommodation.application.port.`in`.RegisterAccommodationUseCase
 import com.yongchul.booking.accommodation.domain.Accommodation
 import com.yongchul.booking.accommodation.domain.Room
 import com.yongchul.booking.accommodation.domain.RoomSchedule
 import com.yongchul.booking.common.DateRange
+import com.yongchul.booking.common.Money
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.LocalDate
+import java.time.temporal.ChronoUnit
 
 @Service
 @Transactional(readOnly = true)
@@ -21,7 +24,7 @@ class AccommodationService(
     private val roomJpaRepository: RoomJpaRepository,
     private val roomScheduleJpaRepository: RoomScheduleJpaRepository,
     private val confirmedBookingDateJpaRepository: ConfirmedBookingDateJpaRepository,
-) : RegisterAccommodationUseCase, BlockRoomScheduleUseCase {
+) : RegisterAccommodationUseCase, BlockRoomScheduleUseCase, CalculateCancellationRefundUseCase {
 
     fun listAllAccommodations(): List<Accommodation> = accommodationJpaRepository.findAll()
 
@@ -60,7 +63,8 @@ class AccommodationService(
                 address = command.address,
                 description = command.description,
                 hostName = command.hostName,
-                preemptionPolicy = command.preemptionPolicy,
+                operationPolicy = command.operationPolicy,
+                checkInTime = command.checkInTime,
             )
         )
 
@@ -75,7 +79,7 @@ class AccommodationService(
                 name = command.roomName,
                 capacity = command.capacity,
                 pricePerNight = command.pricePerNight,
-                preemptionPolicy = command.preemptionPolicy,
+                operationPolicy = command.operationPolicy,
             )
         )
     }
@@ -117,5 +121,22 @@ class AccommodationService(
     @Transactional
     override fun unblock(command: BlockRoomScheduleUseCase.UnblockCommand) {
         roomScheduleJpaRepository.deleteByRoomIdAndBlockedDate(command.roomId, command.date)
+    }
+
+    override fun calculateRefundRatio(
+        command: CalculateCancellationRefundUseCase.CalculateRefundRatioCommand,
+    ): CalculateCancellationRefundUseCase.RefundRatio {
+        val room = roomJpaRepository.findById(command.roomId).orElseThrow {
+            NoSuchElementException("방을 찾을 수 없습니다: roomId=${command.roomId}")
+        }
+        val policy = room.resolvedPolicy()
+        val ratio = policy.resolveRefundRatio(
+            checkInDate = command.checkInDate,
+            requestedAt = command.requestedAt,
+        )
+        return CalculateCancellationRefundUseCase.RefundRatio(
+            appliedRefundRatio = ratio,
+            daysUntilCheckIn = ChronoUnit.DAYS.between(command.requestedAt, command.checkInDate),
+        )
     }
 }

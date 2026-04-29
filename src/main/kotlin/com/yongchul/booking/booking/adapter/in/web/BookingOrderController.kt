@@ -1,6 +1,7 @@
 package com.yongchul.booking.booking.adapter.`in`.web
 
 import com.yongchul.booking.booking.adapter.`in`.web.dto.BookingOrderResponse
+import com.yongchul.booking.booking.adapter.`in`.web.dto.CancellationPreviewResponse
 import com.yongchul.booking.booking.adapter.`in`.web.dto.PlaceOrderRequest
 import com.yongchul.booking.booking.application.port.`in`.*
 import com.yongchul.booking.booking.application.service.BookingOrderService
@@ -13,6 +14,7 @@ class BookingOrderController(
     private val placeOrderUseCase: PlaceOrderUseCase,
     private val confirmOrderUseCase: ConfirmOrderUseCase,
     private val cancelOrderUseCase: CancelOrderUseCase,
+    private val previewCancellationUseCase: PreviewCancellationUseCase,
     private val checkInUseCase: CheckInUseCase,
     private val checkOutUseCase: CheckOutUseCase,
     private val bookingOrderService: BookingOrderService,
@@ -41,6 +43,12 @@ class BookingOrderController(
     fun cancelOrder(@PathVariable orderId: Long): ResponseEntity<Unit> {
         cancelOrderUseCase.cancelOrder(orderId)
         return ResponseEntity.ok().build()
+    }
+
+    @GetMapping("/{orderId}/cancellation-preview")
+    fun previewCancellation(@PathVariable orderId: Long): ResponseEntity<CancellationPreviewResponse> {
+        val preview = previewCancellationUseCase.previewCancellation(orderId)
+        return ResponseEntity.ok(CancellationPreviewResponse.from(preview))
     }
 
     @PostMapping("/{orderId}/check-in")
