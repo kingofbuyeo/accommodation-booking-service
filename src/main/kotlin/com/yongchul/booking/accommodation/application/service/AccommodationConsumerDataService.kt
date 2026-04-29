@@ -5,6 +5,8 @@ import com.yongchul.booking.accommodation.domain.event.BookingConfirmedEvent
 import com.yongchul.booking.booking.adapter.out.persistence.BookingOrderJpaRepository
 import com.yongchul.booking.booking.adapter.out.persistence.BookingOrderLineItemJpaRepository
 import com.yongchul.booking.booking.domain.BookingStatus
+import com.yongchul.booking.booking.domain.event.BookingPartiallyCancelledEvent
+import com.yongchul.booking.common.DateRange
 import com.yongchul.booking.common.event.PendingEvent
 import com.yongchul.booking.common.infrastructure.kafka.KafkaTopics
 import com.yongchul.booking.transaction.adapter.out.persistence.TransactionJpaRepository
@@ -79,5 +81,27 @@ class AccommodationConsumerDataService(
                 )
             )
         )
+    }
+
+    /**
+     * Week3 신규: 부분취소 이벤트 수신 — 취소된 날짜의 ConfirmedBookingDate 삭제.
+     *
+     * 멱등 처리: `schedulePreemptionUseCase.releaseConfirmed` 는 이미 삭제된 날짜를 재삭제해도 무해하다.
+     */
+    @Transactional
+    fun handleBookingPartiallyCancelledTx(event: BookingPartiallyCancelledEvent): List<PendingEvent> {
+        val cancelledRange = DateRange(
+            checkIn = event.cancelledCheckIn,
+            checkOut = event.cancelledCheckOut,
+        )
+        schedulePreemptionUseCase.releaseConfirmed(
+            SchedulePreemptionUseCase.ReleaseConfirmedCommand(
+                accommodationId = event.accommodationId,
+                roomId = event.roomId,
+                dateRange = cancelledRange,
+                bookingOrderId = event.bookingOrderId.toLong(),
+            )
+        )
+        return emptyList()
     }
 }

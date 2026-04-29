@@ -52,6 +52,16 @@ class TransactionService(
         eventPublisher.publish(KafkaTopics.TRANSACTION_EVENTS, event)
     }
 
+    /**
+     * Week3 신규: 부분취소 환불.
+     * 결제 결과는 동기 반환되며, 별도 Kafka 이벤트는 발행하지 않는다.
+     * 숙소 점유 해제 알림은 호출자(예약 컨텍스트) 가 [com.yongchul.booking.booking.domain.event.BookingPartiallyCancelledEvent] 로 직접 발행.
+     */
+    override fun refundPartial(
+        command: RefundTransactionUseCase.RefundPartialCommand,
+    ): RefundTransactionUseCase.RefundPartialResult =
+        dataService.refundPartialAndPersist(command)
+
     override fun findLatestPaidByBookingOrderId(
         bookingOrderId: Long,
     ): FindTransactionByBookingOrderUseCase.TransactionSummary? =

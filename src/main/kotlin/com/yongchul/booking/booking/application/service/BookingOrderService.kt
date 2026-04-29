@@ -5,8 +5,11 @@ import com.yongchul.booking.booking.application.port.`in`.CheckInUseCase
 import com.yongchul.booking.booking.application.port.`in`.CheckOutUseCase
 import com.yongchul.booking.booking.application.port.`in`.ConfirmOrderUseCase
 import com.yongchul.booking.booking.application.port.`in`.HostCancelOrderUseCase
+import com.yongchul.booking.booking.application.port.`in`.PartialCancelOrderUseCase
+import com.yongchul.booking.booking.application.port.`in`.PartialCancellationPreview
 import com.yongchul.booking.booking.application.port.`in`.PlaceOrderUseCase
 import com.yongchul.booking.booking.application.port.`in`.PreviewCancellationUseCase
+import com.yongchul.booking.booking.application.port.`in`.PreviewPartialCancellationUseCase
 import com.yongchul.booking.booking.domain.BookingOrder
 import com.yongchul.booking.booking.domain.BookingOrderLineItem
 import com.yongchul.booking.common.event.PendingEvent
@@ -37,7 +40,9 @@ class BookingOrderService(
     CheckInUseCase,
     CheckOutUseCase,
     PreviewCancellationUseCase,
-    HostCancelOrderUseCase {
+    HostCancelOrderUseCase,
+    PartialCancelOrderUseCase,
+    PreviewPartialCancellationUseCase {
 
     fun loadOrder(orderId: Long): BookingOrder = dataService.loadOrder(orderId)
 
@@ -71,6 +76,19 @@ class BookingOrderService(
 
     override fun previewCancellation(orderId: Long): PreviewCancellationUseCase.CancellationPreview =
         dataService.previewCancellation(orderId)
+
+    override fun previewPartialCancellation(
+        command: PreviewPartialCancellationUseCase.PreviewPartialCancelCommand,
+    ): PartialCancellationPreview =
+        dataService.previewPartialCancellation(command)
+
+    override fun partialCancelOrder(
+        command: PartialCancelOrderUseCase.PartialCancelCommand,
+    ): PartialCancelOrderUseCase.PartialCancelResult {
+        val result = dataService.partialCancelTx(command)
+        publishAll(result.events)
+        return result.useCase
+    }
 
     private fun publishAll(events: List<PendingEvent>) {
         events.forEach { eventPublisher.publish(it.topic, it.payload) }

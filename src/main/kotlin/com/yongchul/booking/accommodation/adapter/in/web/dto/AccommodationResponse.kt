@@ -7,6 +7,7 @@ import com.yongchul.booking.accommodation.domain.RoomScheduleType
 import com.yongchul.booking.accommodation.domain.vo.AccommodationOperationPolicy
 import java.math.BigDecimal
 import java.time.LocalDate
+import java.math.RoundingMode
 
 data class AccommodationResponse(
     val id: Long,
@@ -26,8 +27,18 @@ data class AccommodationResponse(
         val pricePerNight: BigDecimal,
         val currency: String,
         val operationPolicy: PolicyResponse,
+        val partialCancellationPolicy: PartialCancellationPolicyResponse?,
         val blockedDates: List<BlockedDate>,
         val bookedDates: List<LocalDate>,
+    )
+
+    data class PartialCancellationPolicyResponse(
+        val enabled: Boolean,
+        val deadlineDaysBeforeCheckIn: Int,
+        /** 환불 비율 (0.0~1.0). 예: 0.9 = 페널티 10% */
+        val penaltyRatio: BigDecimal,
+        /** 화면 표시용 페널티 퍼센트. 예: 10 */
+        val penaltyPercent: Int,
     )
 
     data class BlockedDate(
@@ -72,6 +83,22 @@ data class AccommodationResponse(
                     pricePerNight = room.pricePerNight.amount,
                     currency = room.pricePerNight.currency,
                     operationPolicy = room.operationPolicy.toResponse(),
+                    partialCancellationPolicy = room.resolvedPolicy()
+                        .partialCancellationPolicy
+                        ?.takeIf { it.effectiveEnabled }
+                        ?.let { p ->
+                            val ratio = p.effectivePenaltyRatio
+                            PartialCancellationPolicyResponse(
+                                enabled = true,
+                                deadlineDaysBeforeCheckIn = p.effectiveDeadlineDays,
+                                penaltyRatio = ratio,
+                                penaltyPercent = BigDecimal.ONE
+                                    .subtract(ratio)
+                                    .multiply(BigDecimal("100"))
+                                    .setScale(0, RoundingMode.HALF_UP)
+                                    .toInt(),
+                            )
+                        },
                     blockedDates = (schedulesByRoomId[room.id] ?: emptyList()).map { s ->
                         BlockedDate(date = s.blockedDate, type = s.type, reason = s.reason)
                     },

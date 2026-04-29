@@ -110,8 +110,55 @@ class Transaction(
         )
     }
 
+    /**
+     * Week3 신규: 부분취소 환불.
+     *
+     * - PAID 상태에서만 호출 가능. 상태는 변하지 않으며 PAID 가 유지된다.
+     * - 동일 요청키([requestKey])로 이미 PARTIAL_REFUND row 가 존재하면 멱등 처리(같은 detail 반환).
+     * - 이전 환불(부분/전체)을 모두 합한 값과 이번 환불 금액의 합이 결제 금액을 초과할 수 없다.
+     *
+     * 반환 detail 의 [TransactionDetail.requestKey] 는 unique constraint 로 보호된다.
+     * 멱등 처리는 호출자(Service) 가 미리 조회 후 분기하는 방식으로 보조한다.
+     */
+    fun refundPartial(
+        currentDetails: List<TransactionDetail>,
+        refundAmount: RefundAmount,
+        requestKey: String,
+    ): TransactionDetail {
+        require(status == TransactionStatus.PAID) {
+            "PAID 상태에서만 부분취소 환불을 처리할 수 있습니다. 현재 상태: $status"
+        }
+        require(requestKey.isNotBlank()) { "부분취소 요청키가 비어 있습니다." }
+        require(refundAmount.money.amount.signum() >= 0) {
+            "환불 금액은 0 이상이어야 합니다. 요청: ${refundAmount.money}"
+        }
+        val paid = computePaidAmount(currentDetails)
+        require(paid.amount.signum() > 0) { "결제 금액이 0인 Transaction은 환불할 수 없습니다." }
+
+        val previouslyRefunded = computeRefundedAmount(currentDetails)
+        val newCumulative = previouslyRefunded.amount + refundAmount.money.amount
+        require(newCumulative <= paid.amount) {
+            "누적 환불 금액이 결제 금액을 초과합니다. 결제: $paid, 누적환불: $newCumulative"
+        }
+
+        updatedAt = LocalDateTime.now()
+        return TransactionDetail(
+            transactionId = id,
+            type = TransactionDetailType.PARTIAL_REFUND,
+            refundAmount = refundAmount,
+            requestKey = requestKey,
+        )
+    }
+
     private fun computePaidAmount(details: List<TransactionDetail>): Money =
         details.filter { it.type == TransactionDetailType.PAYMENT }
             .mapNotNull { it.ledgerInfo?.paidAmount }
+            .fold(Money.ZERO) { acc, m -> acc + m }
+
+    private fun computeRefundedAmount(details: List<TransactionDetail>): Money =
+        details.filter {
+            it.type == TransactionDetailType.REFUND || it.type == TransactionDetailType.PARTIAL_REFUND
+        }
+            .mapNotNull { it.refundAmount?.money }
             .fold(Money.ZERO) { acc, m -> acc + m }
 }

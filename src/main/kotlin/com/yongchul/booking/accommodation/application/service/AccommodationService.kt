@@ -84,6 +84,17 @@ class AccommodationService(
         )
     }
 
+    /** Week3 신규: 호스트가 방의 부분취소 정책을 설정/변경한다. */
+    @Transactional
+    override fun updatePartialCancellationPolicy(
+        command: RegisterAccommodationUseCase.UpdatePartialCancellationPolicyCommand,
+    ): Room {
+        val room = loadRoom(command.accommodationId, command.roomId)
+        val currentPolicy = room.resolvedPolicy()
+        room.operationPolicy = currentPolicy.copy(partialCancellationPolicy = command.policy)
+        return roomJpaRepository.save(room)
+    }
+
     @Transactional
     override fun block(command: BlockRoomScheduleUseCase.BlockCommand): RoomSchedule {
         require(roomJpaRepository.existsByIdAndAccommodationId(command.roomId, command.accommodationId)) {

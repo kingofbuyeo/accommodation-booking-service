@@ -11,8 +11,28 @@ import com.yongchul.booking.transaction.domain.vo.RefundAmount
 interface RefundTransactionUseCase {
     fun cancelWithPenalty(command: CancelWithPenaltyCommand)
 
+    /**
+     * Week3 신규: 부분취소 환불.
+     * 동일 [RefundPartialCommand.requestKey] 로 이미 처리된 경우 멱등(같은 결과 반환).
+     */
+    fun refundPartial(command: RefundPartialCommand): RefundPartialResult
+
     data class CancelWithPenaltyCommand(
         val transactionId: Long,
         val refundAmount: RefundAmount,
+    )
+
+    data class RefundPartialCommand(
+        val transactionId: Long,
+        val refundAmount: RefundAmount,
+        val requestKey: String,
+    )
+
+    data class RefundPartialResult(
+        val transactionId: Long,
+        val requestKey: String,
+        val refundAmount: RefundAmount,
+        /** true 면 같은 요청키로 이미 처리되어 신규 환불이 일어나지 않음. */
+        val alreadyProcessed: Boolean,
     )
 }
