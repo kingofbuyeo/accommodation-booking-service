@@ -5,13 +5,25 @@ import com.yongchul.booking.accommodation.domain.Room
 import com.yongchul.booking.accommodation.domain.RoomSchedule
 import com.yongchul.booking.accommodation.domain.RoomScheduleType
 import com.yongchul.booking.accommodation.domain.vo.AccommodationOperationPolicy
+import com.yongchul.booking.accommodation.domain.vo.PartialCancellationPolicy
 import com.yongchul.booking.common.Money
+import java.math.BigDecimal
 import java.time.LocalDate
 import java.time.LocalTime
 
 interface RegisterAccommodationUseCase {
     fun register(command: RegisterAccommodationCommand): Accommodation
     fun addRoom(command: AddRoomCommand): Room
+
+    /** Week3 신규: 호스트가 방의 부분취소 정책을 설정/변경한다. */
+    fun updatePartialCancellationPolicy(command: UpdatePartialCancellationPolicyCommand): Room
+
+    data class UpdatePartialCancellationPolicyCommand(
+        val accommodationId: Long,
+        val roomId: Long,
+        /** null 이면 정책을 제거해 "부분취소 불가"로 되돌린다. */
+        val policy: PartialCancellationPolicy?,
+    )
 
     data class RegisterAccommodationCommand(
         val name: String,

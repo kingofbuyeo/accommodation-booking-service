@@ -104,6 +104,49 @@ class TransactionDataService(
         )
     }
 
+    /**
+     * Week3 신규: 부분취소 환불.
+     *
+     * 멱등성: 동일 [RefundTransactionUseCase.RefundPartialCommand.requestKey] 로 이미 처리된 경우
+     * 신규 detail 을 만들지 않고 기존 detail 의 환불액을 반환한다.
+     */
+    @Transactional
+    fun refundPartialAndPersist(
+        command: RefundTransactionUseCase.RefundPartialCommand,
+    ): RefundTransactionUseCase.RefundPartialResult {
+        // 1. 멱등성 체크 — 같은 요청키로 처리된 적 있다면 그 결과를 반환
+        val existing = transactionDetailJpaRepository.findByRequestKey(command.requestKey)
+        if (existing != null) {
+            require(existing.transactionId == command.transactionId) {
+                "동일 요청키가 다른 거래에 이미 존재합니다. requestKey=${command.requestKey}"
+            }
+            val existingRefund = existing.refundAmount
+                ?: throw IllegalStateException("기존 PARTIAL_REFUND detail 에 환불 정보가 없습니다.")
+            return RefundTransactionUseCase.RefundPartialResult(
+                transactionId = command.transactionId,
+                requestKey = command.requestKey,
+                refundAmount = existingRefund,
+                alreadyProcessed = true,
+            )
+        }
+
+        // 2. 신규 부분취소 환불 처리
+        val transaction = loadTransactionForUpdate(command.transactionId)
+        val currentDetails = transactionDetailJpaRepository.findByTransactionId(command.transactionId)
+        val detail = transaction.refundPartial(
+            currentDetails = currentDetails,
+            refundAmount = command.refundAmount,
+            requestKey = command.requestKey,
+        )
+        transactionDetailJpaRepository.save(detail)
+        return RefundTransactionUseCase.RefundPartialResult(
+            transactionId = transaction.id,
+            requestKey = command.requestKey,
+            refundAmount = command.refundAmount,
+            alreadyProcessed = false,
+        )
+    }
+
     fun findLatestPaidByBookingOrderId(
         bookingOrderId: Long,
     ): FindTransactionByBookingOrderUseCase.TransactionSummary? {

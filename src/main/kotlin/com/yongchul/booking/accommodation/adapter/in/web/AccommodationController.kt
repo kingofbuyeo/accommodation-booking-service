@@ -7,6 +7,7 @@ import com.yongchul.booking.accommodation.application.service.AccommodationServi
 import com.yongchul.booking.accommodation.domain.RoomScheduleType
 import com.yongchul.booking.accommodation.domain.vo.AccommodationOperationPolicy
 import com.yongchul.booking.accommodation.domain.vo.CancellationPenaltyTier
+import com.yongchul.booking.accommodation.domain.vo.PartialCancellationPolicy
 import com.yongchul.booking.common.Money
 import org.springframework.format.annotation.DateTimeFormat
 import org.springframework.http.ResponseEntity
@@ -141,6 +142,7 @@ class AccommodationController(
         val longLeadTimeTtlMinutes: Long = 120,
         val defaultTtlMinutes: Long = 60,
         val cancellationPenaltyTiers: List<CancellationPenaltyTierRequest>? = null,
+        val partialCancellationPolicy: PartialCancellationPolicyRequest? = null,
     ) {
         fun toOperationPolicy(): AccommodationOperationPolicy {
             val tiers = cancellationPenaltyTiers?.map { it.toTier() }
@@ -153,6 +155,7 @@ class AccommodationController(
                 longLeadTimeTtlMinutes = longLeadTimeTtlMinutes,
                 defaultTtlMinutes = defaultTtlMinutes,
                 cancellationPenaltyTiers = tiers,
+                partialCancellationPolicy = partialCancellationPolicy?.toPolicy(),
             )
         }
     }
@@ -198,4 +201,38 @@ class AccommodationController(
         val type: RoomScheduleType,
         val reason: String?,
     )
+
+    // ─── Week3 신규: 부분취소 정책 설정 ───
+
+    /**
+     * 호스트가 방의 부분취소 정책을 설정/변경한다.
+     * `enabled=false` 또는 요청 body 없음(null)이면 부분취소 불가로 초기화.
+     */
+    @PutMapping("/{accommodationId}/rooms/{roomId}/partial-cancellation-policy")
+    fun updatePartialCancellationPolicy(
+        @PathVariable accommodationId: Long,
+        @PathVariable roomId: Long,
+        @RequestBody(required = false) request: PartialCancellationPolicyRequest?,
+    ): ResponseEntity<Unit> {
+        registerAccommodationUseCase.updatePartialCancellationPolicy(
+            RegisterAccommodationUseCase.UpdatePartialCancellationPolicyCommand(
+                accommodationId = accommodationId,
+                roomId = roomId,
+                policy = request?.toPolicy(),
+            )
+        )
+        return ResponseEntity.ok().build()
+    }
+
+    data class PartialCancellationPolicyRequest(
+        val enabled: Boolean,
+        val deadlineDaysBeforeCheckIn: Int,
+        val penaltyRatio: BigDecimal,
+    ) {
+        fun toPolicy() = PartialCancellationPolicy(
+            enabled = enabled,
+            deadlineDaysBeforeCheckIn = deadlineDaysBeforeCheckIn,
+            penaltyRatio = penaltyRatio,
+        )
+    }
 }

@@ -4,6 +4,7 @@ import com.yongchul.booking.accommodation.adapter.out.persistence.CancellationPe
 import jakarta.persistence.Column
 import jakarta.persistence.Convert
 import jakarta.persistence.Embeddable
+import jakarta.persistence.Embedded
 import java.math.BigDecimal
 import java.time.Duration
 import java.time.LocalDate
@@ -33,6 +34,13 @@ data class AccommodationOperationPolicy(
     @Convert(converter = CancellationPenaltyTiersConverter::class)
     @Column(name = "cancellation_penalty_tiers", columnDefinition = "TEXT")
     val cancellationPenaltyTiers: List<CancellationPenaltyTier>? = DEFAULT_TIERS,
+
+    /**
+     * Week3 신규: 부분취소 정책 (날짜 단위).
+     * NULL 또는 enabled=false 인 경우 도메인 규칙상 부분취소 불가로 해석한다.
+     */
+    @Embedded
+    val partialCancellationPolicy: PartialCancellationPolicy? = null,
 ) {
     val effectiveShortLeadTimeDays: Int
         get() = shortLeadTimeDays ?: DEFAULT_SHORT_LEAD_TIME_DAYS
@@ -78,6 +86,50 @@ data class AccommodationOperationPolicy(
             .maxByOrNull { it.minDaysToCheckIn }
         return matched?.refundRatio ?: CancellationPenaltyTier.MIN_RATIO
     }
+
+    /**
+     * 부분취소 가능 여부와 환불 비율을 반환한다.
+     *
+     * 정책이 NULL 이거나 `enabled = false` 면 부분취소 불가로 응답.
+     * 요청 시점이 D-N 이전이면 [effectivePenaltyRatio] 비율로 환불.
+     *
+     * @return Pair(가능여부, 환불비율) — 가능여부=false 일 땐 환불비율은 의미 없음(0).
+     */
+    fun resolvePartialCancellationDecision(
+        checkInDate: LocalDate,
+        requestedAt: LocalDate = LocalDate.now(),
+    ): PartialCancellationDecision {
+        val policy = partialCancellationPolicy
+        if (policy == null || !policy.effectiveEnabled) {
+            return PartialCancellationDecision(
+                allowed = false,
+                refundRatio = BigDecimal.ZERO,
+                reasonCode = "POLICY_NOT_ENABLED",
+                reasonMessage = "이 숙소는 부분취소가 허용되지 않습니다.",
+            )
+        }
+        if (!policy.isWithinDeadline(checkInDate, requestedAt)) {
+            return PartialCancellationDecision(
+                allowed = false,
+                refundRatio = BigDecimal.ZERO,
+                reasonCode = "DEADLINE_EXCEEDED",
+                reasonMessage = "부분취소 가능 기간이 지났습니다 (체크인 ${policy.effectiveDeadlineDays}일 전까지 가능).",
+            )
+        }
+        return PartialCancellationDecision(
+            allowed = true,
+            refundRatio = policy.resolveRefundRatio(),
+            reasonCode = null,
+            reasonMessage = null,
+        )
+    }
+
+    data class PartialCancellationDecision(
+        val allowed: Boolean,
+        val refundRatio: BigDecimal,
+        val reasonCode: String?,
+        val reasonMessage: String?,
+    )
 
     companion object {
         const val DEFAULT_SHORT_LEAD_TIME_DAYS: Int = 3

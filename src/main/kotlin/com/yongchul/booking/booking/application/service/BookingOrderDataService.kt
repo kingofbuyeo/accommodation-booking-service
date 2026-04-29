@@ -6,14 +6,20 @@ import com.yongchul.booking.accommodation.application.service.AccommodationServi
 import com.yongchul.booking.booking.adapter.out.persistence.BookingOrderJpaRepository
 import com.yongchul.booking.booking.adapter.out.persistence.BookingOrderLineItemJpaRepository
 import com.yongchul.booking.booking.application.port.`in`.HostCancelOrderUseCase
+import com.yongchul.booking.booking.application.port.`in`.PartialCancelOrderUseCase
+import com.yongchul.booking.booking.application.port.`in`.PartialCancellationPreview
 import com.yongchul.booking.booking.application.port.`in`.PlaceOrderUseCase
 import com.yongchul.booking.booking.application.port.`in`.PreviewCancellationUseCase
+import com.yongchul.booking.booking.application.port.`in`.PreviewPartialCancellationUseCase
 import com.yongchul.booking.booking.domain.BookingOrder
 import com.yongchul.booking.booking.domain.BookingOrderLineItem
 import com.yongchul.booking.booking.domain.BookingStatus
 import com.yongchul.booking.booking.domain.event.BookingCancelledEvent
+import com.yongchul.booking.booking.domain.event.BookingPartiallyCancelledEvent
 import com.yongchul.booking.booking.domain.vo.AccommodationSnapshot
+import com.yongchul.booking.booking.domain.vo.DailyPrice
 import com.yongchul.booking.booking.domain.vo.RoomSnapshot
+import com.yongchul.booking.common.DateRange
 import com.yongchul.booking.common.Money
 import com.yongchul.booking.common.event.PendingEvent
 import com.yongchul.booking.common.infrastructure.kafka.KafkaTopics
@@ -26,6 +32,7 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.security.MessageDigest
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.temporal.ChronoUnit
@@ -104,6 +111,11 @@ class BookingOrderDataService(
             throw IllegalStateException("이미 선점 중인 일정입니다. 다른 날짜를 선택해 주세요.")
         }
 
+        // 예약 시점 날짜별 가격 스냅샷 생성 (부분취소 환불 계산 기준)
+        val dailyPriceSnapshots = command.dateRange.dates().map { date ->
+            DailyPrice(date = date, amount = room.pricePerNight)
+        }
+
         lineItemJpaRepository.save(
             BookingOrderLineItem(
                 bookingOrderId = order.id,
@@ -120,6 +132,9 @@ class BookingOrderDataService(
                     pricePerNightAtBooking = room.pricePerNight,
                 ),
                 dateRange = command.dateRange,
+                activeDateRanges = listOf(command.dateRange),
+                cancelledDateRanges = emptyList(),
+                dailyPriceSnapshots = dailyPriceSnapshots,
             )
         )
 
@@ -262,6 +277,191 @@ class BookingOrderDataService(
         events.add(PendingEvent(KafkaTopics.BOOKING_EVENTS, BookingCancelledEvent(bookingOrderId = bookingOrderId)))
         return events
     }
+
+    // ───────────────────── 부분취소 (Week3 신규) ─────────────────────
+
+    /**
+     * 부분취소 미리보기 (DB 변경 없음).
+     */
+    fun previewPartialCancellation(
+        command: PreviewPartialCancellationUseCase.PreviewPartialCancelCommand,
+    ): PartialCancellationPreview {
+        val order = loadOrder(command.orderId)
+        require(order.status == BookingStatus.CONFIRMED) {
+            "CONFIRMED 상태의 예약만 부분취소 미리보기가 가능합니다. 현재 상태: ${order.status}"
+        }
+
+        val lineItem = lineItemJpaRepository.findById(command.lineItemId).orElseThrow {
+            NoSuchElementException("라인 아이템을 찾을 수 없습니다: id=${command.lineItemId}")
+        }
+        require(lineItem.bookingOrderId == command.orderId) {
+            "라인 아이템이 해당 예약에 속하지 않습니다."
+        }
+
+        val cancelRange = DateRange(checkIn = command.cancelCheckIn, checkOut = command.cancelCheckOut)
+        val room = accommodationService.loadRoom(
+            lineItem.accommodationSnapshot.accommodationId,
+            lineItem.roomSnapshot.roomId,
+        )
+        val policy = room.resolvedPolicy()
+        val checkIn = lineItem.effectiveActiveDateRanges.minOf { it.checkIn }
+        val decision = policy.resolvePartialCancellationDecision(checkInDate = checkIn)
+
+        if (!decision.allowed) {
+            return PartialCancellationPreview(
+                orderId = command.orderId,
+                lineItemId = command.lineItemId,
+                cancelCheckIn = command.cancelCheckIn,
+                cancelCheckOut = command.cancelCheckOut,
+                cancelNights = 0,
+                cancelledAmount = Money.ZERO,
+                refundAmount = Money.ZERO,
+                penaltyAmount = Money.ZERO,
+                refundRatio = BigDecimal.ZERO,
+                partialCancelable = false,
+                reasonCode = decision.reasonCode,
+                reasonMessage = decision.reasonMessage,
+            )
+        }
+
+        val cancelledAmount = lineItem.computeCancelledAmount(cancelRange)
+        val refundAmount = lineItem.computePartialRefundAmount(cancelRange, decision.refundRatio)
+        val penaltyAmount = Money(
+            amount = cancelledAmount.amount - refundAmount.amount,
+            currency = cancelledAmount.currency,
+        )
+
+        return PartialCancellationPreview(
+            orderId = command.orderId,
+            lineItemId = command.lineItemId,
+            cancelCheckIn = command.cancelCheckIn,
+            cancelCheckOut = command.cancelCheckOut,
+            cancelNights = cancelRange.nights,
+            cancelledAmount = cancelledAmount,
+            refundAmount = refundAmount,
+            penaltyAmount = penaltyAmount,
+            refundRatio = decision.refundRatio,
+            partialCancelable = true,
+            reasonCode = null,
+            reasonMessage = null,
+        )
+    }
+
+    /**
+     * 부분취소 실행 트랜잭션.
+     *
+     * 흐름: 도메인 검증 → 결제 부분환불(동기) → lineItem 갱신 + commit → BookingPartiallyCancelledEvent 반환
+     * 활성 전체 == 요청 범위인 경우 전체취소(cancelOrderTx) 흐름으로 자동 변환.
+     */
+    @Transactional
+    fun partialCancelTx(command: PartialCancelOrderUseCase.PartialCancelCommand): PartialCancelTxResult {
+        val order = loadOrderForUpdate(command.orderId)
+        require(order.status == BookingStatus.CONFIRMED) {
+            "CONFIRMED 상태에서만 부분취소가 가능합니다. 현재 상태: ${order.status}"
+        }
+
+        val lineItem = lineItemJpaRepository.findById(command.lineItemId).orElseThrow {
+            NoSuchElementException("라인 아이템을 찾을 수 없습니다: id=${command.lineItemId}")
+        }
+        require(lineItem.bookingOrderId == command.orderId) {
+            "라인 아이템이 해당 예약에 속하지 않습니다."
+        }
+
+        val cancelRange = DateRange(checkIn = command.cancelCheckIn, checkOut = command.cancelCheckOut)
+        val room = accommodationService.loadRoom(
+            lineItem.accommodationSnapshot.accommodationId,
+            lineItem.roomSnapshot.roomId,
+        )
+        val policy = room.resolvedPolicy()
+
+        // 도메인 메서드 (정책 + 불변식 검증 포함)
+        val domainResult = order.partiallyCancel(
+            lineItem = lineItem,
+            range = cancelRange,
+            policy = policy,
+        )
+
+        // 전체취소로 변환된 경우 — 기존 cancelOrderTx 흐름과 동일하게 결제 전액 환불
+        if (domainResult.convertedToFullCancel) {
+            val fullCancelEvents = cancelConfirmedOrderInternal(
+                order = order,
+                lineItems = listOf(lineItem),
+                hostForceFullRefund = false,
+                reasonText = "부분취소 전체 전환 — 활성 구간 소진",
+            )
+            return PartialCancelTxResult(
+                events = fullCancelEvents,
+                useCase = PartialCancelOrderUseCase.PartialCancelResult(
+                    orderId = command.orderId,
+                    refundAmount = Money.ZERO,
+                    penaltyAmount = Money.ZERO,
+                    remainingNights = 0,
+                    convertedToFullCancel = true,
+                ),
+            )
+        }
+
+        // 부분 환불 (동기)
+        val requestKey = buildRequestKey(command.orderId, cancelRange)
+        val transaction = transactionDataService.findLatestPaidByBookingOrderId(command.orderId)
+            ?: throw IllegalStateException("결제 내역을 찾을 수 없습니다: orderId=${command.orderId}")
+
+        val refundAmount = lineItem.computePartialRefundAmount(cancelRange, domainResult.refundRatio)
+        val cancelledAmount = lineItem.computeCancelledAmount(cancelRange)
+        val penaltyAmount = Money(
+            amount = cancelledAmount.amount - refundAmount.amount,
+            currency = cancelledAmount.currency,
+        )
+
+        transactionDataService.refundPartialAndPersist(
+            RefundTransactionUseCase.RefundPartialCommand(
+                transactionId = transaction.transactionId,
+                refundAmount = RefundAmount(
+                    money = refundAmount,
+                    reason = "부분취소 환불 — ${cancelRange.checkIn}~${cancelRange.checkOut}",
+                ),
+                requestKey = requestKey,
+            )
+        )
+
+        // 이벤트 준비 (commit 후 발행)
+        val event = BookingPartiallyCancelledEvent(
+            bookingOrderId = command.orderId.toString(),
+            lineItemId = command.lineItemId,
+            accommodationId = lineItem.accommodationSnapshot.accommodationId,
+            roomId = lineItem.roomSnapshot.roomId,
+            cancelledCheckIn = cancelRange.checkIn,
+            cancelledCheckOut = cancelRange.checkOut,
+            requestKey = requestKey,
+        )
+
+        return PartialCancelTxResult(
+            events = listOf(PendingEvent(KafkaTopics.BOOKING_EVENTS, event)),
+            useCase = PartialCancelOrderUseCase.PartialCancelResult(
+                orderId = command.orderId,
+                refundAmount = refundAmount,
+                penaltyAmount = penaltyAmount,
+                remainingNights = domainResult.remainingNights,
+                convertedToFullCancel = false,
+            ),
+        )
+    }
+
+    /**
+     * 요청키 생성: `SHA-256(예약ID + 정렬된 취소 날짜 목록)`.
+     * 부분취소 결제·이벤트 양쪽의 멱등성 보호에 사용된다.
+     */
+    private fun buildRequestKey(orderId: Long, range: DateRange): String {
+        val dates = range.dates().sorted().joinToString(",")
+        val raw = "$orderId:$dates"
+        val digest = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray())
+        return digest.joinToString("") { "%02x".format(it) }.take(64)
+    }
+
+    data class PartialCancelTxResult(
+        val events: List<PendingEvent>,
+        val useCase: PartialCancelOrderUseCase.PartialCancelResult,
+    )
 
     // ───────────────────── 미리보기 (read-only) ─────────────────────
 
